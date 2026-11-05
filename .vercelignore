@@ -2,5 +2,7 @@
 # so it does not trigger the serverless @vercel/python function builder
 interactive_ml_visual_lab/
 *.py
-requirements.txt
+**/*.py
+requirements*.txt
+**/requirements*.txt
 __pycache__/
