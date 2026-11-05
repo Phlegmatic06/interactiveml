@@ -1,0 +1,6 @@
+# Tell Vercel to completely ignore Python files during deployment
+# so it does not trigger the serverless @vercel/python function builder
+interactive_ml_visual_lab/
+*.py
+requirements.txt
+__pycache__/
