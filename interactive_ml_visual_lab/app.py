@@ -10,9 +10,13 @@ from sklearn.decomposition import FactorAnalysis
 st.set_page_config(page_title="Interactive ML Visual Lab", page_icon="📊", layout="wide")
 
 st.title("Interactive Machine Learning Visual Lab")
-st.caption("Explore Factor Analysis and Hidden Markov Models by changing inputs and observing how the results update.")
+st.caption("Explore Factor Analysis, Hidden Markov Models, and Adaptive Basis Function Models interactively.")
 
-tab_fa, tab_hmm = st.tabs(["Factor Analysis", "HMM Message Passing"])
+tab_fa, tab_hmm, tab_abfm = st.tabs([
+    "Factor Analysis",
+    "HMM Message Passing",
+    "Adaptive Basis Function Models"
+])
 
 # ---------------- Factor Analysis ----------------
 with tab_fa:
@@ -215,7 +219,7 @@ with tab_hmm:
             value_vars=["P(Healthy | all observations)", "P(Unwell | all observations)"],
             var_name="Hidden state", value_name="Marginal probability"
         )
-        chart_df["Hidden state"] = chart_df["Hidden state"].str.replace("P(", "").str.replace(" | all observations)", "", regex=False)
+        chart_df["Hidden state"] = chart_df["Hidden state"].str.replace("P(", "", regex=False).str.replace(" | all observations)", "", regex=False)
         fig = px.line(
             chart_df, x="Time step", y="Marginal probability", color="Hidden state",
             markers=True, hover_data=["Observation"],
@@ -244,5 +248,422 @@ with tab_hmm:
             "The marginal is proportional to αₜ(i)βₜ(i), normalized across states."
         )
 
+# ---------------- Adaptive Basis Function Models ----------------
+with tab_abfm:
+    st.header("3. Investigating Adaptive Basis Function Models for Nonlinear Function Approximation")
+    st.write(
+        "Explore how **Fixed Basis Models** (Polynomial Regression and Fixed RBF Networks) compare with "
+        "**Adaptive Basis Function Models** (Adaptive RBF Networks where basis centers $\\mu_k$ and widths $\\sigma_k$ "
+        "are learned dynamically via gradient descent)."
+    )
+
+    ctrl_col, view_col = st.columns([1, 2])
+
+    with ctrl_col:
+        st.subheader("Target Function & Data")
+        func_option = st.selectbox(
+            "Select Nonlinear Target Function",
+            options=[
+                "Complex Nonlinear (Colab Default)",
+                "Sharp Localized Peak (Gaussian Bump)",
+                "Runge's Function (Polynomial Stress Test)",
+                "Damped Chirp (Multi-Frequency)"
+            ],
+            help="Choose the underlying mathematical function to approximate."
+        )
+
+        n_samples = st.slider("Total Samples (N)", 100, 500, 300, 20)
+        noise_level = st.slider("Noise Std Dev (σ_noise)", 0.0, 0.30, 0.12, 0.01)
+        test_ratio = st.slider("Test Split Ratio", 0.15, 0.40, 0.25, 0.05)
+        seed_val = st.number_input("Random Seed", value=42, min_value=0, max_value=9999)
+
+        st.divider()
+        st.subheader("Model Hyperparameters")
+        poly_degree = st.slider("Polynomial Degree", 1, 10, 5, help="Maximum polynomial degree for baseline regression.")
+        n_centers = st.slider("Number of RBF Centers (K)", 4, 30, 20, help="Number of Gaussian basis functions.")
+        fixed_sigma = st.slider("Fixed RBF Width (σ)", 0.1, 1.5, 0.5, 0.05, help="Constant width for Fixed RBF.")
+
+        with st.expander("Adaptive RBF Training Settings", expanded=False):
+            epochs = st.slider("Training Epochs", 100, 1500, 800, 50)
+            learning_rate = st.select_slider("Adam Learning Rate", options=[0.001, 0.005, 0.01, 0.02, 0.05], value=0.01)
+
+        st.divider()
+        st.subheader("Display Toggles")
+        show_poly = st.checkbox("Show Polynomial Regression", value=True)
+        show_fixed = st.checkbox("Show Fixed RBF Network", value=True)
+        show_adaptive = st.checkbox("Show Adaptive RBF Network", value=True)
+        show_train = st.checkbox("Show Training Data Points", value=False)
+
+    # Mathematical Target Functions
+    def get_ground_truth(x, choice):
+        if choice == "Complex Nonlinear (Colab Default)":
+            return np.sin(1.5 * x) + 0.35 * np.cos(4.0 * x) + 0.12 * (x ** 2)
+        elif choice == "Sharp Localized Peak (Gaussian Bump)":
+            return 0.6 * np.sin(2.0 * x) + 2.5 * np.exp(-30.0 * ((x - 0.5) ** 2))
+        elif choice == "Runge's Function (Polynomial Stress Test)":
+            return 1.0 / (1.0 + 10.0 * (x ** 2))
+        elif choice == "Damped Chirp (Multi-Frequency)":
+            return np.sin(1.8 * x) * np.cos(1.2 * (x ** 2))
+        return np.sin(1.5 * x) + 0.35 * np.cos(4.0 * x) + 0.12 * (x ** 2)
+
+    # Data Generation
+    np.random.seed(int(seed_val))
+    X_domain = np.linspace(-3.0, 3.0, n_samples).reshape(-1, 1)
+    y_clean = get_ground_truth(X_domain, func_option)
+    noise = np.random.normal(0, noise_level, X_domain.shape)
+    y_noisy = y_clean + noise
+
+    # Split train and test sets
+    perm = np.random.permutation(n_samples)
+    n_test = max(10, int(test_ratio * n_samples))
+    test_idx = perm[:n_test]
+    train_idx = perm[n_test:]
+
+    X_train, y_train = X_domain[train_idx], y_noisy[train_idx]
+    X_test, y_test = X_domain[test_idx], y_noisy[test_idx]
+
+    # Dense evaluation grid for smooth visualization
+    x_plot = np.linspace(-3.0, 3.0, 300).reshape(-1, 1)
+    y_plot_true = get_ground_truth(x_plot, func_option)
+
+    # 1. Polynomial Regression with Ridge
+    Phi_train_poly = np.hstack([X_train ** p for p in range(poly_degree + 1)])
+    Phi_test_poly = np.hstack([X_test ** p for p in range(poly_degree + 1)])
+    Phi_plot_poly = np.hstack([x_plot ** p for p in range(poly_degree + 1)])
+    ridge_reg_poly = 0.01 * np.eye(poly_degree + 1)
+    w_poly = np.linalg.solve(Phi_train_poly.T @ Phi_train_poly + ridge_reg_poly, Phi_train_poly.T @ y_train)
+    poly_pred_test = Phi_test_poly @ w_poly
+    poly_pred_plot = Phi_plot_poly @ w_poly
+
+    # 2. Fixed RBF Network
+    centers_fixed = np.linspace(-3.0, 3.0, n_centers)
+    Phi_train_fixed = np.exp(-((X_train - centers_fixed.reshape(1, -1)) ** 2) / (2 * (fixed_sigma ** 2)))
+    Phi_test_fixed = np.exp(-((X_test - centers_fixed.reshape(1, -1)) ** 2) / (2 * (fixed_sigma ** 2)))
+    Phi_plot_fixed = np.exp(-((x_plot - centers_fixed.reshape(1, -1)) ** 2) / (2 * (fixed_sigma ** 2)))
+
+    # Add bias column
+    Phi_train_fixed_b = np.column_stack([Phi_train_fixed, np.ones(len(X_train))])
+    Phi_test_fixed_b = np.column_stack([Phi_test_fixed, np.ones(len(X_test))])
+    Phi_plot_fixed_b = np.column_stack([Phi_plot_fixed, np.ones(len(x_plot))])
+
+    w_fixed = np.linalg.solve(
+        Phi_train_fixed_b.T @ Phi_train_fixed_b + 0.01 * np.eye(Phi_train_fixed_b.shape[1]),
+        Phi_train_fixed_b.T @ y_train
+    )
+    fixed_pred_test = Phi_test_fixed_b @ w_fixed
+    fixed_pred_plot = Phi_plot_fixed_b @ w_fixed
+
+    # 3. Adaptive RBF Network (Adam optimization in pure NumPy)
+    initial_centers = np.linspace(-3.0, 3.0, n_centers).reshape(1, -1).copy()
+    centers_adaptive = initial_centers.copy()
+    log_sigma_adaptive = np.full((1, n_centers), np.log(fixed_sigma))
+    np.random.seed(int(seed_val))
+    weights_adaptive = np.random.randn(n_centers, 1) * 0.1
+    bias_adaptive = np.zeros(1)
+
+    params = [centers_adaptive, log_sigma_adaptive, weights_adaptive, bias_adaptive]
+    m_mom = [np.zeros_like(p) for p in params]
+    v_mom = [np.zeros_like(p) for p in params]
+    beta1, beta2, eps = 0.9, 0.999, 1e-8
+    N_tr = len(X_train)
+    loss_history = []
+
+    for ep in range(1, epochs + 1):
+        sigma_cur = np.exp(log_sigma_adaptive) + 1e-6
+        diff = X_train - centers_adaptive
+        phi_cur = np.exp(-(diff ** 2) / (2 * (sigma_cur ** 2)))
+        y_hat = phi_cur @ weights_adaptive + bias_adaptive
+        err = y_hat - y_train
+        loss = float(np.mean(err ** 2))
+        loss_history.append(loss)
+
+        d_out = 2.0 * err / N_tr
+        d_bias = np.sum(d_out, axis=0)
+        d_weights = phi_cur.T @ d_out
+        d_phi = d_out @ weights_adaptive.T
+        d_u = -d_phi * phi_cur
+        d_centers = np.sum(d_u * (-diff / (sigma_cur ** 2)), axis=0, keepdims=True)
+        d_log_sigma = np.sum(d_u * (-(diff ** 2) / (sigma_cur ** 2)), axis=0, keepdims=True)
+
+        grads = [d_centers, d_log_sigma, d_weights, d_bias]
+
+        for i in range(len(params)):
+            m_mom[i] = beta1 * m_mom[i] + (1 - beta1) * grads[i]
+            v_mom[i] = beta2 * v_mom[i] + (1 - beta2) * (grads[i] ** 2)
+            m_hat = m_mom[i] / (1 - beta1 ** ep)
+            v_hat = v_mom[i] / (1 - beta2 ** ep)
+            params[i] -= learning_rate * m_hat / (np.sqrt(v_hat) + eps)
+
+    # Adaptive RBF predictions
+    sigma_final = np.exp(log_sigma_adaptive) + 1e-6
+    diff_test = X_test - centers_adaptive
+    phi_test_adapt = np.exp(-(diff_test ** 2) / (2 * (sigma_final ** 2)))
+    adaptive_pred_test = phi_test_adapt @ weights_adaptive + bias_adaptive
+
+    diff_plot = x_plot - centers_adaptive
+    phi_plot_adapt = np.exp(-(diff_plot ** 2) / (2 * (sigma_final ** 2)))
+    adaptive_pred_plot = phi_plot_adapt @ weights_adaptive + bias_adaptive
+
+    # Evaluation metrics calculation
+    def calc_metrics(y_true_vals, y_pred_vals):
+        mse = float(np.mean((y_true_vals - y_pred_vals) ** 2))
+        rmse = float(np.sqrt(mse))
+        ss_tot = float(np.sum((y_true_vals - np.mean(y_true_vals)) ** 2))
+        ss_res = float(np.sum((y_true_vals - y_pred_vals) ** 2))
+        r2 = float(1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0)
+        return mse, rmse, r2
+
+    mse_poly, rmse_poly, r2_poly = calc_metrics(y_test, poly_pred_test)
+    mse_fixed, rmse_fixed, r2_fixed = calc_metrics(y_test, fixed_pred_test)
+    mse_adapt, rmse_adapt, r2_adapt = calc_metrics(y_test, adaptive_pred_test)
+
+    eval_data = [
+        {"Model": "Polynomial Regression", "MSE": mse_poly, "RMSE": rmse_poly, "R2 Score": r2_poly, "Parameters": poly_degree + 1},
+        {"Model": "Fixed RBF Network", "MSE": mse_fixed, "RMSE": rmse_fixed, "R2 Score": r2_fixed, "Parameters": n_centers + 1},
+        {"Model": "Adaptive RBF Network", "MSE": mse_adapt, "RMSE": rmse_adapt, "R2 Score": r2_adapt, "Parameters": 3 * n_centers + 1}
+    ]
+    eval_df = pd.DataFrame(eval_data)
+    best_model_name = eval_df.loc[eval_df["RMSE"].idxmin()]["Model"]
+
+    with view_col:
+        # KPI Metric Cards
+        kpi1, kpi2, kpi3 = st.columns(3)
+        kpi1.metric(
+            "Polynomial Regression",
+            f"RMSE: {rmse_poly:.4f}",
+            f"R²: {r2_poly:.4f}",
+            delta_color="off"
+        )
+        kpi2.metric(
+            "Fixed RBF Network",
+            f"RMSE: {rmse_fixed:.4f}",
+            f"R²: {r2_fixed:.4f}",
+            delta_color="off"
+        )
+        is_best = (best_model_name == "Adaptive RBF Network")
+        kpi3.metric(
+            "Adaptive RBF Network",
+            f"RMSE: {rmse_adapt:.4f}",
+            f"R²: {r2_adapt:.4f}",
+            delta="★ Best Performer" if is_best else "Tested"
+        )
+
+        # Plot 1: Nonlinear Function Approximation Comparison
+        st.subheader("Model Predictions vs. True Function")
+        fig_main = go.Figure()
+
+        # Actual test data scatter
+        sort_test = np.argsort(X_test.flatten())
+        fig_main.add_trace(go.Scatter(
+            x=X_test.flatten()[sort_test],
+            y=y_test.flatten()[sort_test],
+            mode="markers",
+            name="Actual Test Data",
+            marker=dict(color="rgba(120, 120, 140, 0.6)", size=6, symbol="circle")
+        ))
+
+        # Training data scatter (optional)
+        if show_train:
+            sort_train = np.argsort(X_train.flatten())
+            fig_main.add_trace(go.Scatter(
+                x=X_train.flatten()[sort_train],
+                y=y_train.flatten()[sort_train],
+                mode="markers",
+                name="Training Data",
+                marker=dict(color="rgba(70, 130, 180, 0.4)", size=4, symbol="cross")
+            ))
+
+        # True Function curve
+        fig_main.add_trace(go.Scatter(
+            x=x_plot.flatten(),
+            y=y_plot_true.flatten(),
+            mode="lines",
+            name="Original Function f(x)",
+            line=dict(color="#ef4444", width=2.5, dash="dash")
+        ))
+
+        # Model Curves
+        if show_poly:
+            fig_main.add_trace(go.Scatter(
+                x=x_plot.flatten(),
+                y=poly_pred_plot.flatten(),
+                mode="lines",
+                name=f"Polynomial (deg {poly_degree})",
+                line=dict(color="#f59e0b", width=2.0)
+            ))
+
+        if show_fixed:
+            fig_main.add_trace(go.Scatter(
+                x=x_plot.flatten(),
+                y=fixed_pred_plot.flatten(),
+                mode="lines",
+                name=f"Fixed RBF (K={n_centers}, σ={fixed_sigma})",
+                line=dict(color="#10b981", width=2.0)
+            ))
+
+        if show_adaptive:
+            fig_main.add_trace(go.Scatter(
+                x=x_plot.flatten(),
+                y=adaptive_pred_plot.flatten(),
+                mode="lines",
+                name=f"Adaptive RBF (K={n_centers})",
+                line=dict(color="#6366f1", width=3.0)
+            ))
+
+        fig_main.update_layout(
+            height=460,
+            margin=dict(l=20, r=20, t=30, b=20),
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            xaxis_title="Input X",
+            yaxis_title="Output Y"
+        )
+        st.plotly_chart(fig_main, use_container_width=True)
+
+    # Section 2: Basis Functions Decomposition (Visual Proof of Adaptivity)
+    st.divider()
+    st.subheader("Under the Hood: Fixed vs. Adaptive Basis Function Decomposition")
+    st.write(
+        "This visualization reveals **why** the models behave differently. "
+        "In the **Fixed RBF**, Gaussian basis functions are locked in a rigid grid with fixed width. "
+        "In the **Adaptive RBF**, the gradient optimization shifts the centers $\\mu_k$ (marked by bottom ticks) "
+        "and dynamically shrinks or widens $\\sigma_k$ to concentrate model capacity where the function oscillates fastest!"
+    )
+
+    col_decomp_f, col_decomp_a = st.columns(2)
+
+    with col_decomp_f:
+        fig_bf_fixed = go.Figure()
+        for k in range(n_centers):
+            basis_k = np.exp(-((x_plot.flatten() - centers_fixed[k]) ** 2) / (2 * (fixed_sigma ** 2)))
+            fig_bf_fixed.add_trace(go.Scatter(
+                x=x_plot.flatten(),
+                y=basis_k,
+                mode="lines",
+                line=dict(width=1.2),
+                showlegend=False,
+                hoverinfo="skip"
+            ))
+        # Add center points on axis
+        fig_bf_fixed.add_trace(go.Scatter(
+            x=centers_fixed,
+            y=np.zeros(n_centers),
+            mode="markers",
+            marker=dict(color="#10b981", size=7, symbol="triangle-up"),
+            name="Fixed Centers (Rigid Uniform)"
+        ))
+        fig_bf_fixed.update_layout(
+            title="Fixed Gaussian Basis Functions (Uniform Grid)",
+            height=320,
+            xaxis_title="Input X",
+            yaxis_title="Activation ϕ(x)",
+            yaxis_range=[-0.05, 1.05],
+            margin=dict(l=20, r=20, t=40, b=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+        )
+        st.plotly_chart(fig_bf_fixed, use_container_width=True)
+
+    with col_decomp_a:
+        learned_c = centers_adaptive.flatten()
+        learned_s = sigma_final.flatten()
+        fig_bf_adapt = go.Figure()
+        for k in range(n_centers):
+            basis_k = np.exp(-((x_plot.flatten() - learned_c[k]) ** 2) / (2 * (learned_s[k] ** 2)))
+            fig_bf_adapt.add_trace(go.Scatter(
+                x=x_plot.flatten(),
+                y=basis_k,
+                mode="lines",
+                line=dict(width=1.2),
+                showlegend=False,
+                hoverinfo="skip"
+            ))
+        # Add learned center points on axis
+        fig_bf_adapt.add_trace(go.Scatter(
+            x=learned_c,
+            y=np.zeros(n_centers),
+            mode="markers",
+            marker=dict(color="#6366f1", size=7, symbol="diamond"),
+            name="Adapted Centers (Data-Driven)"
+        ))
+        fig_bf_adapt.update_layout(
+            title="Learned Adaptive Basis Functions (Centers & Widths Optimized)",
+            height=320,
+            xaxis_title="Input X",
+            yaxis_title="Activation ϕ(x)",
+            yaxis_range=[-0.05, 1.05],
+            margin=dict(l=20, r=20, t=40, b=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+        )
+        st.plotly_chart(fig_bf_adapt, use_container_width=True)
+
+    # Section 3: Training Convergence & Benchmark Metrics
+    col_loss, col_bars = st.columns(2)
+
+    with col_loss:
+        st.subheader("Adaptive RBF Training Loss (Adam Convergence)")
+        fig_loss = px.line(
+            x=np.arange(1, len(loss_history) + 1),
+            y=loss_history,
+            labels={"x": "Epoch", "y": "Mean Squared Error (MSE)"},
+            title="Optimization Loss History"
+        )
+        fig_loss.update_traces(line_color="#6366f1", line_width=2.2)
+        fig_loss.update_layout(height=320, margin=dict(l=20, r=20, t=40, b=20))
+        st.plotly_chart(fig_loss, use_container_width=True)
+
+    with col_bars:
+        st.subheader("Model Benchmark Comparison")
+        fig_bar = px.bar(
+            eval_df,
+            x="Model",
+            y="RMSE",
+            color="Model",
+            text=eval_df["RMSE"].apply(lambda v: f"{v:.4f}"),
+            title="Test Root Mean Squared Error (Lower is Better)",
+            color_discrete_map={
+                "Polynomial Regression": "#f59e0b",
+                "Fixed RBF Network": "#10b981",
+                "Adaptive RBF Network": "#6366f1"
+            }
+        )
+        fig_bar.update_traces(textposition="outside")
+        fig_bar.update_layout(height=320, showlegend=False, margin=dict(l=20, r=20, t=40, b=20))
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+    # Section 4: Learned Parameters Inspection Table
+    with st.expander("Inspect Learned Adaptive Parameters Table", expanded=False):
+        param_table = pd.DataFrame({
+            "Basis k": np.arange(1, n_centers + 1),
+            "Initial Center μ₀": initial_centers.flatten(),
+            "Learned Center μ*": learned_c,
+            "Shift (Δμ)": learned_c - initial_centers.flatten(),
+            "Learned Width σ*": learned_s,
+            "Linear Weight w*": weights_adaptive.flatten()
+        })
+        st.dataframe(
+            param_table.style.format({
+                "Initial Center μ₀": "{:.3f}",
+                "Learned Center μ*": "{:.3f}",
+                "Shift (Δμ)": "{:.3f}",
+                "Learned Width σ*": "{:.3f}",
+                "Linear Weight w*": "{:.4f}"
+            }),
+            use_container_width=True
+        )
+
+    # Section 5: Presentation Ready Talking Points
+    with st.expander("🎓 Presentation Talking Points & Theoretical Context (Click to expand)", expanded=True):
+        st.markdown("""
+### Key Takeaways for Your Presentation:
+1. **The Core Limitation of Fixed Basis Functions**:
+   - **Polynomial Regression** uses global basis functions $\\phi_m(x) = x^m$. Adjusting a weight to fit data in one region creates unwanted oscillations everywhere else (especially near the boundaries, known as **Runge's Phenomenon**).
+   - **Fixed RBF Networks** localize the basis functions with Gaussians, but placing centers $\\mu_k$ on a rigid uniform grid is inefficient: regions of flat behavior get as many basis functions as regions of high-frequency oscillations.
+2. **The Power of Adaptivity**:
+   - In the **Adaptive RBF Network**, both the centers $\\mu_k$ and widths $\\sigma_k$ are treated as differentiable parameters and optimized via gradient descent (Adam).
+   - Notice how the basis functions naturally migrate toward areas of steep curvature, and their widths $\\sigma_k$ narrow to resolve fine ripples without requiring thousands of parameters.
+3. **Connection to Deep Learning**:
+   - A single-layer Neural Network (Multilayer Perceptron) is fundamentally an **adaptive basis function model**: the hidden neurons compute adaptive ridge functions $\\sigma(\\mathbf{v}^T \\mathbf{x} + b)$ whose orientations and offsets adapt during backpropagation!
+        """)
+
 st.divider()
-st.caption("Educational demonstration. Factor Analysis uses the built-in Iris dataset; the HMM sequence is illustrative.")
+st.caption("Educational demonstration: Factor Analysis (Iris), HMM Forward-Backward Message Passing, and Adaptive Basis Function Models for Nonlinear Function Approximation.")
