@@ -429,23 +429,23 @@ with tab_abfm:
         # KPI Metric Cards
         kpi1, kpi2, kpi3 = st.columns(3)
         kpi1.metric(
-            "Polynomial Regression",
-            f"RMSE: {rmse_poly:.4f}",
-            f"R²: {r2_poly:.4f}",
+            label="Polynomial Regression",
+            value=f"{rmse_poly:.4f} RMSE",
+            delta=f"R²: {r2_poly:.4f}",
             delta_color="off"
         )
         kpi2.metric(
-            "Fixed RBF Network",
-            f"RMSE: {rmse_fixed:.4f}",
-            f"R²: {r2_fixed:.4f}",
+            label="Fixed RBF Network",
+            value=f"{rmse_fixed:.4f} RMSE",
+            delta=f"R²: {r2_fixed:.4f}",
             delta_color="off"
         )
         is_best = (best_model_name == "Adaptive RBF Network")
         kpi3.metric(
-            "Adaptive RBF Network",
-            f"RMSE: {rmse_adapt:.4f}",
-            f"R²: {r2_adapt:.4f}",
-            delta="★ Best Performer" if is_best else "Tested"
+            label="Adaptive RBF Network",
+            value=f"{rmse_adapt:.4f} RMSE",
+            delta=f"R²: {r2_adapt:.4f}" + (" (★ Best)" if is_best else ""),
+            delta_color="normal" if is_best else "off"
         )
 
         # Plot 1: Nonlinear Function Approximation Comparison
